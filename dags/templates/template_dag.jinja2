@@ -1,0 +1,16 @@
+from airflow import DAG
+from airflow.providers.databricks.operators.databricks import DatabricksRunNowOperator
+from datetime import datetime
+
+with DAG(dag_id="{{ dag_id }}",
+         start_date=datetime(2021, 1, 1),
+         schedule_interval="{{ schedule_interval }}",
+         catchup={{ catchup or False }}) as dag:
+    
+    opr_run_now = DatabricksRunNowOperator(
+        task_id = "{{ task_id }}",
+        databricks_conn_id = "{{ conn_id }}",
+        job_id = "{{ workflow_id }}"
+    )
+    
+    opr_run_now

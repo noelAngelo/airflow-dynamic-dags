@@ -1,0 +1,6 @@
+dag_id: 'etl_ingestion_fleetsu_dag'
+schedule_interval: '@daily'
+catchup: False
+task_id: 'fleetsu_databricks_workflow'
+conn_id: 'databricks_default'
+workflow_id: '0'

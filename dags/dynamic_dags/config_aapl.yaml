@@ -1,4 +1,0 @@
-dag_id: 'AAPL'
-schedule_interval: '@daily'
-catchup: False
-input: 126
