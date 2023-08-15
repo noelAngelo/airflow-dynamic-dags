@@ -1,6 +1,29 @@
-dag_id: 'etl_ingestion_fleetsu_dag'
-schedule_interval: '@daily'
+# Source config
+source_name: 'fleetsu'
+
+# DAG config
+dag_id: 'elt_fleetsu_dag'
+owner: 'airflow'
+start_date_year: 2023
+start_date_month: 8
+start_date_day: 15
+retries: 1
+tags:
+  - 'bronze'
+schedule: '@daily'
 catchup: False
-task_id: 'fleetsu_databricks_workflow'
-conn_id: 'databricks_default'
-workflow_id: '0'
+
+# Task config -- Databricks
+databricks_conn_id: 'databricks_default'
+databricks_poll_period: 30
+databricks_retry_limit: 3
+databricks_retry_delay: 1
+
+# Task config -- dbt
+dbt_cloud_conn_id: 'dbt_cloud_default'
+dbt_account_id: 3405
+dbt_project_id: 2780
+dbt_trigger_reason: 'Triggered via Airflow'
+
+# Task config -- MS Teams
+msteams_conn_id: 'msteams_default'

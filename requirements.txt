@@ -1,2 +1,5 @@
 apache-airflow-providers-databricks
 apache-airflow-providers-dbt-cloud
+requests
+PyYAML
+Jinja2
