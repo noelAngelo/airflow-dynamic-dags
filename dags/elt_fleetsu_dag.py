@@ -73,6 +73,9 @@ class MSTeamsWebhookHook(BaseHook):
                         "$schema":"http://adaptivecards.io/schemas/adaptive-card.json",
                         "type":"AdaptiveCard",
                         "version":"1.5",
+                        "msteams": {
+                            "width": "Full"
+                        },
                         "body":[
                             # HEADING
                             {
