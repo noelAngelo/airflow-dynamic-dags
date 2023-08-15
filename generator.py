@@ -10,5 +10,5 @@ for filename in os.listdir(f'{file_dir}/config'):
     if filename.endswith('.yaml'):
         with open(f'{file_dir}/config/{filename}', 'r') as configfile:
             config = yaml.safe_load(configfile)
-            with open(f'dags/output/{config["dag_id"]}.py', 'w') as f:
+            with open(f'dags/{config["dag_id"]}.py', 'w') as f:
                 f.write(template.render(config))
