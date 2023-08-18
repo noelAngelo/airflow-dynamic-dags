@@ -16,7 +16,7 @@ DAG_START_DATE_YEAR: int = {{ start_date_year }}
 DAG_START_DATE_MONTH: int = {{ start_date_month }}
 DAG_START_DATE_DAY: int = {{ start_date_day }}
 DAG_RETRIES: int = {{ retries }}
-DAG_TAGS: list = [SOURCE_NAME].extend("{{ tags }}")
+DAG_TAGS: list = {{ tags | safe }}
 DAG_SCHEDULE_INTERVAL: str = "{{ schedule }}"
 DAG_CATCHUP: bool = {{ catchup or False }}
 
