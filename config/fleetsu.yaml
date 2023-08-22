@@ -2,7 +2,8 @@
 source_name: 'fleetsu'
 
 # DAG config
-dag_id: 'elt_fleetsu_dag'
+dag_id: 'elt_bronze_fleetsu_dag'
+dag_template: template_bronze_dag
 owner: 'airflow'
 start_date_year: 2023
 start_date_month: 8
@@ -21,7 +22,7 @@ databricks_retry_delay: 1
 
 # Task config -- dbt
 dbt_cloud_conn_id: 'dbt_cloud_default'
-dbt_account_id: 3405
+dbt_account_id: 92
 dbt_project_id: 2780
 dbt_trigger_reason: 'Triggered via Airflow'
 

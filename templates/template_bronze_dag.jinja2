@@ -1,0 +1,142 @@
+from airflow.decorators import task, dag, task_group
+from airflow.hooks.base import BaseHook
+from airflow.providers.databricks.operators.databricks import DatabricksRunNowOperator
+from airflow.providers.dbt.cloud.operators.dbt import DbtCloudRunJobOperator
+from datetime import datetime
+import requests
+from typing import Optional
+
+
+# Source config
+SOURCE_NAME: str = "{{ source_name }}"
+
+# DAG config -- default
+DAG_OWNER: str = "{{ owner }}"
+DAG_START_DATE_YEAR: int = {{ start_date_year }}
+DAG_START_DATE_MONTH: int = {{ start_date_month }}
+DAG_START_DATE_DAY: int = {{ start_date_day }}
+DAG_RETRIES: int = {{ retries }}
+DAG_TAGS: list = {{ tags | safe }}
+DAG_SCHEDULE_INTERVAL: str = "{{ schedule }}"
+DAG_CATCHUP: bool = {{ catchup or False }}
+
+# Task config -- Databricks
+DATABRICKS_CONN_ID: str = "{{ databricks_conn_id }}"
+DATABRICKS_JOB_NAME: str = f'bronze_{SOURCE_NAME}_ingestion_workflow'
+DATABRICKS_JOB_ID: Optional[int] = None
+DATABRICKS_NOTEBOOK_PARAMS: Optional[dict] = None
+DATABRICKS_POLL_PERIOD: int = {{ databricks_poll_period }}
+DATABRICKS_RETRY_LIMIT: int = {{ databricks_retry_limit }}
+DATABRICKS_RETRY_DELAY: int = {{ databricks_retry_delay }}
+
+# Task config -- dbt
+DBT_CLOUD_CONN_ID = "{{ dbt_cloud_conn_id }}"
+DBT_JOB_NAME: str = f'bronze_{SOURCE_NAME}_processing_job'
+DBT_JOB_ID: Optional[int] = None
+DBT_ACCOUNT_ID: int = {{ dbt_account_id }}
+DBT_PROJECT_ID: int = {{ dbt_project_id }}
+DBT_TRIGGER_REASON: str = "{{ dbt_trigger_reason }}"
+
+# Task config -- MS Teams
+MSTEAMS_CONN_ID = "{{ msteams_conn_id }}"
+
+
+# -- DO NOT EDIT PAST HERE --
+
+
+class DbtCloudHook(BaseHook):
+    """
+    Airflow Hook for interacting with the dbt Cloud API to list jobs.
+    """
+
+    def __init__(self, dbt_cloud_conn_id, version: str = 'v2'):
+        super().__init__()
+        self.dbt_cloud_conn_id = dbt_cloud_conn_id
+        self.conn = self.get_connection(self.dbt_cloud_conn_id)
+        self.tenant = self.conn.host.rstrip('/')
+        self.version = version
+        self.token = self.conn.password  # Assuming token-based authentication
+
+    def _build_headers(self):
+        return {
+            'Authorization': f'Token {self.token}',
+            'Content-Type': 'application/json',
+        }
+
+    def list_jobs(self, account_id: int):
+        endpoint = f'/accounts/{account_id}/jobs/'
+        url = f'https://{self.tenant}/api/{self.version}/{endpoint}'
+        headers = self._build_headers()
+
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 200:
+            response_dict = response.json()
+            if response_dict['status']['code'] == 200:
+                return response_dict['data']
+
+        else:
+            response.raise_for_status()
+
+    def get_job_id(self, name: str, account_id: int, project_id: int):
+        jobs = self.list_jobs(account_id)
+        results = list(
+            filter(lambda job:
+                   job['name'] == name and
+                   job['account_id'] == account_id and
+                   job['project_id'] == project_id,
+                   jobs))
+        if results:
+            return results[0].get('id')
+
+
+default_args = {
+    'owner': DAG_OWNER,
+    'start_date': datetime(DAG_START_DATE_YEAR, DAG_START_DATE_MONTH, DAG_START_DATE_DAY),
+    'retries': DAG_RETRIES,
+}
+
+
+@task_group
+def dbt_run():
+    @task(task_id=f'get_{SOURCE_NAME}_job_id')
+    def get_dbt_job_id(name: str, account_id: int, project_id: int):
+        hook = DbtCloudHook(dbt_cloud_conn_id=DBT_CLOUD_CONN_ID)
+        job_id = hook.get_job_id(name=name, account_id=account_id, project_id=project_id)
+        return job_id
+
+    # define Op
+    t1 = get_dbt_job_id(name=DBT_JOB_NAME, account_id=DBT_ACCOUNT_ID, project_id=DBT_PROJECT_ID)
+    processing_op = DbtCloudRunJobOperator(
+        task_id=f'trigger_{SOURCE_NAME}_job',
+        dbt_cloud_conn_id=DBT_CLOUD_CONN_ID,
+        job_id=t1,
+        trigger_reason=DBT_TRIGGER_REASON)
+
+    # define DAG
+    return t1.set_downstream(processing_op)
+
+DAG_TAGS.append(SOURCE_NAME)
+@dag(dag_id=f'elt_bronze_{SOURCE_NAME}_dag',
+     schedule_interval=DAG_SCHEDULE_INTERVAL,
+     default_args=default_args,
+     catchup=DAG_CATCHUP,
+     max_active_runs=1,
+     tags=DAG_TAGS)
+def elt_dag():
+    # define Ops
+    t2 = dbt_run()
+    ingestion_op = DatabricksRunNowOperator(
+        task_id=f'trigger_{SOURCE_NAME}_workflow',
+        job_name=DATABRICKS_JOB_NAME,
+        notebook_params=DATABRICKS_NOTEBOOK_PARAMS,
+        polling_period_seconds=DATABRICKS_POLL_PERIOD,
+        databricks_retry_limit=DATABRICKS_RETRY_LIMIT,
+        databricks_retry_delay=DATABRICKS_RETRY_DELAY,
+        databricks_conn_id=DATABRICKS_CONN_ID)
+
+    # define DAG
+    ingestion_op.set_downstream(t2)  # t2 depends on ingestion_op
+
+
+elt_dag()
