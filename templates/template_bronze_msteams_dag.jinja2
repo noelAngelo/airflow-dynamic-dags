@@ -1,0 +1,194 @@
+from airflow.decorators import dag
+from airflow.operators.empty import EmptyOperator
+from airflow.hooks.base import BaseHook
+from airflow.notifications.basenotifier import BaseNotifier, Context
+from pendulum import datetime
+import requests
+import json
+
+# Notification config - MS Teams
+MSTEAMS_CONN_ID = "msteams_default"
+
+
+class MSTeamsWebhookHook(BaseHook):
+    """
+    Airflow Hook for sending messages to a Microsoft Teams channel using a webhook.
+    """
+
+    def __init__(self, teams_conn_id='msteams_default'):
+        super().__init__()
+        self.teams_conn_id = teams_conn_id
+        self.conn = self.get_connection(self.teams_conn_id)
+        self.webhook_url = self.conn.host
+
+    def send_task_status(self,
+                         task_name: str,
+                         parent_dag: str,
+                         status: str,
+                         run_type: str,
+                         duration):
+        payload = {
+            "type": "message",
+            "attachments": [
+                {
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "contentUrl": None,
+                    "content": {
+                        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                        "type": "AdaptiveCard",
+                        "version": "1.5",
+                        "msteams": {
+                            "width": "Full"
+                        },
+                        "body": [
+                            # HEADING
+                            {
+                                "type": "TextBlock",
+                                "text": "Airflow Task Summary",
+                                "weight": "bolder",
+                                "size": "large",
+                                "style": "heading"
+                            },
+                            # SUBHEADING
+                            {
+                                "type": "ColumnSet",
+                                "columns": [
+                                    {
+                                        "type": "Column",
+                                        "width": "auto",
+                                        "items": [
+                                            {
+                                                "type": "Image",
+                                                "url": "https://pbs.twimg.com/profile_images/3647943215/d7f12830b3c17a5a9e4afcc370e3a37e_400x400.jpeg",
+                                                "size": "small",
+                                                "style": "person"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "type": "Column",
+                                        "width": "stretch",
+                                        "items": [
+                                            {
+                                                "type": "TextBlock",
+                                                "text": task_name,
+                                                "weight": "bolder",
+                                                "wrap": "true"
+                                            },
+                                            {
+                                                "type": "TextBlock",
+                                                "spacing": "none",
+                                                "text": f'Parent DAG - {parent_dag}',
+                                                "isSubtle": "true",
+                                                "wrap": "true"
+                                            },
+                                            {
+                                                "type": "TextBlock",
+                                                "spacing": "none",
+                                                "text": "Triggered on {{DATE(2017-02-14T06:00:00Z, SHORT)}} at {{TIME(2017-02-14T06:00:00Z)}}",
+                                                "isSubtle": "true",
+                                                "wrap": "true"
+                                            }
+                                        ]
+                                    }
+                                ]
+                            },
+                            # MAIN
+                            {
+                                "type": "FactSet",
+                                "facts": [
+                                    {
+                                        "title": "Name:",
+                                        "value": "<Job Name>"
+                                    },
+                                    {
+                                        "title": "ID:",
+                                        "value": "<Job Id>"
+                                    },
+                                    {
+                                        "title": "Duration:",
+                                        "value": duration
+                                    },
+                                    {
+                                        "title": "Status:",
+                                        "value": status,
+                                        "color": "good"
+                                    },
+                                    {
+                                        "title": "Run Type:",
+                                        "value": run_type
+                                    }
+                                ]
+                            }
+                        ],
+                        "actions": [
+                            {
+                                "type": "Action.OpenUrl",
+                                "title": "View Job Run",
+                                "url": "https://google.com"
+                            },
+                            {
+                                "type": "Action.OpenUrl",
+                                "title": "View Task Run",
+                                "url": "https://google.com"
+                            }
+
+                        ]
+                    }
+
+                }
+            ]
+        }
+        headers = {"content-type": "application/json"}
+        response = requests.post(self.webhook_url, json=payload, headers=headers)
+
+        if response.status_code == 200:
+            return "Message sent successfully to Microsoft Teams."
+        else:
+            response.raise_for_status()
+
+
+class TeamsNotifier(BaseNotifier):
+
+    def __init__(self, *, teams_conn_id: str = MSTEAMS_CONN_ID, status: str):
+        super().__init__()
+        self.teams_conn_id = teams_conn_id
+        self.status = status
+
+    def hook(self) -> MSTeamsWebhookHook:
+        """MS Teams Webhook"""
+        return MSTeamsWebhookHook(teams_conn_id=self.teams_conn_id)
+
+    def notify(self, context: Context) -> None:
+        dag_run = context['dag_run']
+        task = context['task']
+        task_instance = context['task_instance']
+        task_key = context['task_instance_key_str']
+        hook = self.hook()
+        hook.send_task_status(
+            task_name=task.task_id,
+            parent_dag=dag_run.dag_id,
+            status=self.status,
+            duration=task_instance.duration,
+            run_type=dag_run.run_type)
+
+
+default_args = {
+    'owner': 'airflow',
+    'start_date': datetime(2023, 1, 1),
+    'retries': 1,
+}
+
+
+@dag(default_args=default_args, catchup=False)
+def example_dag():
+
+    t1 = EmptyOperator(task_id='t1')
+    t2 = EmptyOperator(task_id='t2',
+                       on_success_callback=[TeamsNotifier(status='SUCCESS')],
+                       on_failure_callback=[])
+
+    t1 >> t2
+
+
+example_dag()
