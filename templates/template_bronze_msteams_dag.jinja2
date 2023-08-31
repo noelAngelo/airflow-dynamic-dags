@@ -1,13 +1,119 @@
-from airflow.decorators import dag
-from airflow.operators.empty import EmptyOperator
+from airflow.decorators import task, dag, task_group
 from airflow.hooks.base import BaseHook
 from airflow.notifications.basenotifier import BaseNotifier, Context
-from pendulum import datetime
+from airflow.providers.databricks.operators.databricks import DatabricksRunNowOperator
+from airflow.providers.dbt.cloud.operators.dbt import DbtCloudRunJobOperator
+from datetime import datetime
 import requests
-import json
+from urllib.parse import quote
+
+
+# Source config
+SOURCE_NAME: str = "{{ source_name }}"
+
+# DAG config -- default
+DAG_ID: str = "{{ dag_id }}"
+DAG_OWNER: str = "{{ owner }}"
+DAG_START_DATE_YEAR: int = {{ start_date_year }}
+DAG_START_DATE_MONTH: int = {{ start_date_month }}
+DAG_START_DATE_DAY: int = {{ start_date_day }}
+DAG_RETRIES: int = {{ retries }}
+DAG_TAGS: list = {{ tags | safe }}
+DAG_SCHEDULE_INTERVAL: str = "{{ schedule }}"
+DAG_CATCHUP: bool = {{ catchup or False }}
+
+# Task config -- Databricks
+DATABRICKS_CONN_ID: str = "{{ databricks_conn_id }}"
+DATABRICKS_WORKFLOW_NAME: str = "{{ databricks_workflow_name }}"
+DATABRICKS_POLL_PERIOD: int = {{ databricks_poll_period }}
+DATABRICKS_RETRY_LIMIT: int = {{ databricks_retry_limit }}
+DATABRICKS_RETRY_DELAY: int = {{ databricks_retry_delay }}
+
+# Task config -- dbt
+DBT_CLOUD_CONN_ID = "{{ dbt_cloud_conn_id }}"
+DBT_JOB_NAME: str = "{{ dbt_job_name }}"
+DBT_ENVIRONMENT_NAME: str = "{{ dbt_environment_name }}"
+DBT_PROJECT_ID: int = {{ dbt_project_id }}
+DBT_TRIGGER_REASON: str = "{{ dbt_trigger_reason }}"
 
 # Notification config - MS Teams
-MSTEAMS_CONN_ID = "msteams_default"
+MSTEAMS_CONN_ID = "{{ msteams_conn_id }}"
+
+
+# -- DO NOT EDIT PAST HERE --
+
+class DbtCloudHook(BaseHook):
+    """
+    Airflow Hook for interacting with the dbt Cloud API to list jobs.
+    """
+
+    def __init__(self, dbt_cloud_conn_id, version: str = 'v2'):
+        super().__init__()
+        self.dbt_cloud_conn_id = dbt_cloud_conn_id
+        self.conn = self.get_connection(self.dbt_cloud_conn_id)
+        self.tenant = self.conn.host.rstrip('/')
+        self.account_id = self.conn.login
+        self.version = version
+        self.token = self.conn.password  # Assuming token-based authentication
+
+    def _build_headers(self):
+        return {
+            'Authorization': f'Token {self.token}',
+            'Content-Type': 'application/json',
+        }
+
+    def list_jobs(self):
+        endpoint = f'accounts/{self.account_id}/jobs/'
+        url = f'https://{self.tenant}/api/{self.version}/{endpoint}'
+        headers = self._build_headers()
+
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 200:
+            response_dict = response.json()
+            if response_dict['status']['code'] == 200:
+                return response_dict['data']
+
+        else:
+            response.raise_for_status()
+
+    def list_environments(self):
+        endpoint = f'accounts/{self.account_id}/environments/'
+        url = f'https://{self.tenant}/api/v3/{endpoint}'
+        headers = self._build_headers()
+
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 200:
+            response_dict = response.json()
+            if response_dict['status']['code'] == 200:
+                return response_dict['data']
+
+        else:
+            response.raise_for_status()
+
+    def get_job_id(self, name: str, project_id: int, environment_id: int):
+        jobs = self.list_jobs()
+        results = list(
+            filter(lambda job:
+                   job['name'] == name and
+                   job['account_id'] == int(self.account_id) and
+                   job['project_id'] == project_id and
+                   job['environment_id'] == int(environment_id),
+                   jobs))
+        if results:
+            return results[0].get('id')
+
+    def get_environment_id(self, name: str, project_id: int):
+        envs = self.list_environments()
+        results = list(
+            filter(lambda env:
+                   env['name'] == name and
+                   env['account_id'] == int(self.account_id) and
+                   env['project_id'] == project_id,
+                   envs))
+        if results:
+            return results[0].get('id')
 
 
 class MSTeamsWebhookHook(BaseHook):
@@ -19,14 +125,11 @@ class MSTeamsWebhookHook(BaseHook):
         super().__init__()
         self.teams_conn_id = teams_conn_id
         self.conn = self.get_connection(self.teams_conn_id)
-        self.webhook_url = self.conn.host
+        self.webhook_url = self.conn.host.rstrip('/')  # Assuming the connection holds the webhook URL
 
-    def send_task_status(self,
-                         task_name: str,
-                         parent_dag: str,
-                         status: str,
-                         run_type: str,
-                         duration):
+    def send_task_status(self, conf, dag_run, status):
+        base_url = conf.get('webserver', 'BASE_URL')
+        dag_url = f'{base_url}/dags/{dag_run.dag_id}/grid?dag_run_id={quote(dag_run.run_id)}&tab=graph'
         payload = {
             "type": "message",
             "attachments": [
@@ -34,82 +137,87 @@ class MSTeamsWebhookHook(BaseHook):
                     "contentType": "application/vnd.microsoft.card.adaptive",
                     "contentUrl": None,
                     "content": {
-    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-    "type": "AdaptiveCard",
-    "version": "1.5",
-    "body": [
-        {
-            "type": "ColumnSet",
-            "columns": [
-                {
-                    "type": "Column",
-                    "width": "stretch",
-                    "items": [
-                        {
-                            "type": "TextBlock",
-                            "text": "Airflow Run Summary",
-                            "wrap": true,
-                            "style": "heading",
-                            "horizontalAlignment": "left"
-                        }
-                    ]
-                },
-                {
-                    "type": "Column",
-                    "width": "auto",
-                    "items": [
-                        {
-                            "type": "Image",
-                            "url": "https://airflow.apache.org/docs/apache-airflow/1.10.6/_images/pin_large.png",
-                            "horizontalAlignment": "right",
-                            "size": "small"
-                        }
-                    ],
-                    "horizontalAlignment": "Left",
-                    "verticalContentAlignment": "Center",
-                    "rtl": false
-                }
-            ]
-        },
-        {
-            "type": "TextBlock",
-            "text": "elt_bronze_acs_workflow",
-            "wrap": true,
-            "color": "Dark",
-            "weight": "Bolder",
-            "size": "Small",
-            "fontType": "Monospace",
-            "horizontalAlignment": "Center"
-        },
-        {
-            "type": "TextBlock",
-            "text": "Triggered on {{DATE(2017-02-14T06:00:00Z, SHORT)}}",
-            "isSubtle": true,
-            "wrap": true
-        },
-        {
-            "type": "TextBlock",
-            "text": "{{TIME(2017-02-14T06:00:00Z)}} - {{TIME(2017-02-14T06:00:00Z)}}",
-            "isSubtle": true,
-            "spacing": "None",
-            "wrap": true
-        },
-        {
-            "type": "TextBlock",
-            "text": "Success",
-            "wrap": true,
-            "color": "Good",
-            "weight": "Bolder"
-        }
-    ],
-    "actions": [
-        {
-            "type": "Action.OpenUrl",
-            "title": "View DAG run",
-            "url": "https://google.com"
-        }
-    ]
-}
+                        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                        "type": "AdaptiveCard",
+                        "version": "1.5",
+                        "msteams": {
+                            "width": "Full"
+                        },
+                        "body": [
+                            {
+                                "type": "ColumnSet",
+                                "columns": [
+                                    {
+                                        "type": "Column",
+                                        "width": "stretch",
+                                        "items": [
+                                            {
+                                                "type": "TextBlock",
+                                                "text": dag_run.dag_id,
+                                                "wrap": "true",
+                                                "style": "heading",
+                                                "size": "Large",
+                                                "fontType": "Monospace",
+                                                "horizontalAlignment": "left"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "type": "Column",
+                                        "width": "auto",
+                                        "items": [
+                                            {
+                                                "type": "Image",
+                                                "url": "https://airflow.apache.org/docs/apache-airflow/1.10.6/_images/pin_large.png",
+                                                "horizontalAlignment": "right",
+                                                "size": "small"
+                                            }
+                                        ],
+                                        "horizontalAlignment": "Left",
+                                        "verticalContentAlignment": "Center",
+                                        "rtl": "false"
+                                    }
+                                ]
+                            },
+                            {
+                                "type": "TextBlock",
+                                "text": "Airflow Run Summary",
+                                "wrap": "true",
+                                "color": "Dark",
+                                "weight": "Bolder",
+                            },
+                            {
+                                "type": "TextBlock",
+                                "text": f'Triggered on {dag_run.execution_date.strftime("%a, %b %d, %Y %I:%M %p %Z")}',
+                                "isSubtle": "true",
+                                "size": "small",
+                                "wrap": "true"
+                            },
+                            {
+                                "type": "TextBlock",
+                                "text": f'Finished at {dag_run.end_date.strftime("%b %d, %Y %I:%M %p %Z")}',
+                                "isSubtle": "true",
+                                "size": "small",
+                                "spacing": "None",
+                                "wrap": "true"
+                            },
+                            {
+                                "type": "TextBlock",
+                                "text": dag_run.state,
+                                "wrap": "true",
+                                "color": status.title(),
+                                "size": "large",
+                                "weight": "Bolder"
+                            }
+                        ],
+                        "actions": [
+                            {
+                                "type": "Action.OpenUrl",
+                                "title": "View DAG run",
+                                "url": dag_url
+                            }
+                        ]
+                    }
 
                 }
             ]
@@ -125,10 +233,9 @@ class MSTeamsWebhookHook(BaseHook):
 
 class TeamsNotifier(BaseNotifier):
 
-    def __init__(self, *, teams_conn_id: str = MSTEAMS_CONN_ID, status: str):
+    def __init__(self, *, teams_conn_id: str = MSTEAMS_CONN_ID):
         super().__init__()
         self.teams_conn_id = teams_conn_id
-        self.status = status
 
     def hook(self) -> MSTeamsWebhookHook:
         """MS Teams Webhook"""
@@ -136,34 +243,68 @@ class TeamsNotifier(BaseNotifier):
 
     def notify(self, context: Context) -> None:
         dag_run = context['dag_run']
-        task = context['task']
-        task_instance = context['task_instance']
-        task_key = context['task_instance_key_str']
+        conf = context['conf']
         hook = self.hook()
-        hook.send_task_status(
-            task_name=task.task_id,
-            parent_dag=dag_run.dag_id,
-            status=self.status,
-            duration=task_instance.duration,
-            run_type=dag_run.run_type)
-
+        if dag_run.state == 'success':
+            hook.send_task_status(conf, dag_run, status='Good')
+        elif dag_run.state == 'up_for_retry':
+            hook.send_task_status(conf, dag_run, status='Warning')
+        else:
+            hook.send_task_status(conf, dag_run, status='Attention')
 
 default_args = {
-    'owner': 'airflow',
-    'start_date': datetime(2023, 1, 1),
-    'retries': 1,
+    'owner': DAG_OWNER,
+    'start_date': datetime(DAG_START_DATE_YEAR, DAG_START_DATE_MONTH, DAG_START_DATE_DAY),
+    'retries': DAG_RETRIES,
 }
 
 
-@dag(default_args=default_args, catchup=False)
-def example_dag():
+@task_group
+def dbt_run():
+    @task(task_id=f'get_{SOURCE_NAME}_environment_id')
+    def get_dbt_env_id(name: str, project_id: int):
+        hook = DbtCloudHook(dbt_cloud_conn_id=DBT_CLOUD_CONN_ID)
+        env_id = hook.get_environment_id(name=name, project_id=project_id)
+        return env_id
 
-    t1 = EmptyOperator(task_id='t1')
-    t2 = EmptyOperator(task_id='t2',
-                       on_success_callback=[TeamsNotifier(status='SUCCESS')],
-                       on_failure_callback=[])
+    @task(task_id=f'get_{SOURCE_NAME}_job_id')
+    def get_dbt_job_id(name: str, project_id: int, env_id):
+        hook = DbtCloudHook(dbt_cloud_conn_id=DBT_CLOUD_CONN_ID)
+        job_id = hook.get_job_id(name=name, project_id=project_id, environment_id=env_id)
+        return job_id
 
-    t1 >> t2
+    # define Op
+    t1 = get_dbt_env_id(name=DBT_ENVIRONMENT_NAME, project_id=DBT_PROJECT_ID)
+    t2 = get_dbt_job_id(name=DBT_JOB_NAME, project_id=DBT_PROJECT_ID, env_id=t1)
+    _ = DbtCloudRunJobOperator(
+        task_id=f'trigger_{SOURCE_NAME}_job',
+        dbt_cloud_conn_id=DBT_CLOUD_CONN_ID,
+        job_id=t2,
+        trigger_reason=DBT_TRIGGER_REASON)
 
 
-example_dag()
+DAG_TAGS.append(SOURCE_NAME)
+
+
+@dag(dag_id=DAG_ID,
+     schedule_interval=DAG_SCHEDULE_INTERVAL,
+     default_args=default_args,
+     catchup=DAG_CATCHUP,
+     max_active_runs=1,
+     tags=DAG_TAGS)
+def elt_dag():
+    # define Ops
+    t2 = dbt_run()
+    ingestion_op = DatabricksRunNowOperator(
+        task_id=f'trigger_{SOURCE_NAME}_workflow',
+        job_name=DATABRICKS_WORKFLOW_NAME,
+        polling_period_seconds=DATABRICKS_POLL_PERIOD,
+        databricks_retry_limit=DATABRICKS_RETRY_LIMIT,
+        databricks_retry_delay=DATABRICKS_RETRY_DELAY,
+        databricks_conn_id=DATABRICKS_CONN_ID)
+
+    # define DAG
+    ingestion_op.set_downstream(t2)  # t2 depends on ingestion_op
+
+
+elt_dag()
