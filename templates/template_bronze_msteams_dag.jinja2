@@ -34,107 +34,258 @@ class MSTeamsWebhookHook(BaseHook):
                     "contentType": "application/vnd.microsoft.card.adaptive",
                     "contentUrl": None,
                     "content": {
-                        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                        "type": "AdaptiveCard",
-                        "version": "1.5",
-                        "msteams": {
-                            "width": "Full"
+    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+    "type": "AdaptiveCard",
+    "version": "1.5",
+    "body": [
+        {
+            "type": "TextBlock",
+            "text": "Airflow Task Update",
+            "wrap": true,
+            "style": "heading",
+            "size": "Large"
+        },
+        {
+            "type": "ColumnSet",
+            "columns": [
+                {
+                    "type": "Column",
+                    "width": "auto",
+                    "items": [
+                        {
+                            "type": "Image",
+                            "size": "Small",
+                            "url": "https://www.element61.be/sites/default/files/img_knowledge_base/airflow.png",
+                            "altText": "Airplane"
+                        }
+                    ]
+                },
+                {
+                    "type": "Column",
+                    "width": "stretch",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Task Status",
+                            "horizontalAlignment": "Right",
+                            "isSubtle": true,
+                            "wrap": true
                         },
-                        "body": [
-                            # HEADING
-                            {
-                                "type": "TextBlock",
-                                "text": "Airflow Task Summary",
-                                "weight": "bolder",
-                                "size": "large",
-                                "style": "heading"
-                            },
-                            # SUBHEADING
-                            {
-                                "type": "ColumnSet",
-                                "columns": [
-                                    {
-                                        "type": "Column",
-                                        "width": "auto",
-                                        "items": [
-                                            {
-                                                "type": "Image",
-                                                "url": "https://pbs.twimg.com/profile_images/3647943215/d7f12830b3c17a5a9e4afcc370e3a37e_400x400.jpeg",
-                                                "size": "small",
-                                                "style": "person"
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        "type": "Column",
-                                        "width": "stretch",
-                                        "items": [
-                                            {
-                                                "type": "TextBlock",
-                                                "text": task_name,
-                                                "weight": "bolder",
-                                                "wrap": "true"
-                                            },
-                                            {
-                                                "type": "TextBlock",
-                                                "spacing": "none",
-                                                "text": f'Parent DAG - {parent_dag}',
-                                                "isSubtle": "true",
-                                                "wrap": "true"
-                                            },
-                                            {
-                                                "type": "TextBlock",
-                                                "spacing": "none",
-                                                "text": "Triggered on {{DATE(2017-02-14T06:00:00Z, SHORT)}} at {{TIME(2017-02-14T06:00:00Z)}}",
-                                                "isSubtle": "true",
-                                                "wrap": "true"
-                                            }
-                                        ]
-                                    }
-                                ]
-                            },
-                            # MAIN
-                            {
-                                "type": "FactSet",
-                                "facts": [
-                                    {
-                                        "title": "Name:",
-                                        "value": "<Job Name>"
-                                    },
-                                    {
-                                        "title": "ID:",
-                                        "value": "<Job Id>"
-                                    },
-                                    {
-                                        "title": "Duration:",
-                                        "value": duration
-                                    },
-                                    {
-                                        "title": "Status:",
-                                        "value": status,
-                                        "color": "good"
-                                    },
-                                    {
-                                        "title": "Run Type:",
-                                        "value": run_type
-                                    }
-                                ]
-                            }
-                        ],
-                        "actions": [
-                            {
-                                "type": "Action.OpenUrl",
-                                "title": "View Job Run",
-                                "url": "https://google.com"
-                            },
-                            {
-                                "type": "Action.OpenUrl",
-                                "title": "View Task Run",
-                                "url": "https://google.com"
-                            }
-
-                        ]
-                    }
+                        {
+                            "type": "TextBlock",
+                            "text": "DELAYED",
+                            "horizontalAlignment": "Right",
+                            "spacing": "None",
+                            "size": "Large",
+                            "color": "Attention",
+                            "wrap": true
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "type": "ColumnSet",
+            "separator": true,
+            "spacing": "Medium",
+            "columns": [
+                {
+                    "type": "Column",
+                    "width": "stretch",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Workflow",
+                            "isSubtle": true,
+                            "weight": "Bolder",
+                            "wrap": true
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "bronze_ingestion_workflow",
+                            "spacing": "Small",
+                            "wrap": true
+                        }
+                    ]
+                },
+                {
+                    "type": "Column",
+                    "width": "auto",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Run ID",
+                            "horizontalAlignment": "Right",
+                            "isSubtle": true,
+                            "weight": "Bolder",
+                            "wrap": true
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "14A",
+                            "horizontalAlignment": "Right",
+                            "spacing": "Small",
+                            "wrap": true
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "type": "ColumnSet",
+            "spacing": "Medium",
+            "separator": true,
+            "columns": [
+                {
+                    "type": "Column",
+                    "width": 1,
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Start Time",
+                            "isSubtle": true,
+                            "weight": "Bolder",
+                            "wrap": true
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "9:00 pm",
+                            "spacing": "Small",
+                            "wrap": true
+                        }
+                    ]
+                },
+                {
+                    "type": "Column",
+                    "width": 1,
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": "End Time",
+                            "isSubtle": true,
+                            "horizontalAlignment": "Center",
+                            "weight": "Bolder",
+                            "wrap": true
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "9:01 pm",
+                            "weight": "Bolder",
+                            "horizontalAlignment": "Center",
+                            "spacing": "Small",
+                            "wrap": true
+                        }
+                    ]
+                },
+                {
+                    "type": "Column",
+                    "width": 1,
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Duration",
+                            "isSubtle": true,
+                            "horizontalAlignment": "Right",
+                            "weight": "Bolder",
+                            "wrap": true
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "60 seconds",
+                            "color": "Attention",
+                            "horizontalAlignment": "Right",
+                            "weight": "Bolder",
+                            "spacing": "Small",
+                            "wrap": true
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "type": "ColumnSet",
+            "spacing": "Medium",
+            "separator": true,
+            "columns": [
+                {
+                    "type": "Column",
+                    "width": 1,
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Environment",
+                            "isSubtle": true,
+                            "wrap": true
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "DEV",
+                            "size": "ExtraLarge",
+                            "color": "Accent",
+                            "spacing": "None",
+                            "wrap": true
+                        }
+                    ]
+                },
+                {
+                    "type": "Column",
+                    "width": "auto",
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": " ",
+                            "wrap": true
+                        },
+                        {
+                            "type": "Image",
+                            "url": "https://adaptivecards.io/content/airplane.png",
+                            "altText": "Airplane",
+                            "size": "Small"
+                        }
+                    ]
+                },
+                {
+                    "type": "Column",
+                    "width": 1,
+                    "items": [
+                        {
+                            "type": "TextBlock",
+                            "text": "Source",
+                            "isSubtle": true,
+                            "horizontalAlignment": "Right",
+                            "wrap": true
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "Fleetsu",
+                            "horizontalAlignment": "Right",
+                            "size": "ExtraLarge",
+                            "color": "Accent",
+                            "spacing": "None",
+                            "wrap": true
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "type": "ActionSet",
+            "separator": true,
+            "actions": [
+                {
+                    "type": "Action.OpenUrl",
+                    "title": "View Task Run",
+                    "url": "https://google.com"
+                },
+                {
+                    "type": "Action.OpenUrl",
+                    "title": "View Job Run",
+                    "url": "https://google.com"
+                }
+            ]
+        }
+    ]
+}
 
                 }
             ]
