@@ -1,16 +1,16 @@
 from airflow.decorators import task, dag, task_group
 from airflow.hooks.base import BaseHook
+from airflow.notifications.basenotifier import BaseNotifier, Context
 from airflow.providers.databricks.operators.databricks import DatabricksRunNowOperator
 from airflow.providers.dbt.cloud.operators.dbt import DbtCloudRunJobOperator
 from datetime import datetime
 import requests
-from typing import Optional
-
 
 # Source config
 SOURCE_NAME: str = "{{ source_name }}"
 
 # DAG config -- default
+DAG_ID: str = "{{ dag_id }}"
 DAG_OWNER: str = "{{ owner }}"
 DAG_START_DATE_YEAR: int = {{ start_date_year }}
 DAG_START_DATE_MONTH: int = {{ start_date_month }}
@@ -22,27 +22,23 @@ DAG_CATCHUP: bool = {{ catchup or False }}
 
 # Task config -- Databricks
 DATABRICKS_CONN_ID: str = "{{ databricks_conn_id }}"
-DATABRICKS_JOB_NAME: str = f'bronze_{SOURCE_NAME}_ingestion_workflow'
-DATABRICKS_JOB_ID: Optional[int] = None
-DATABRICKS_NOTEBOOK_PARAMS: Optional[dict] = None
+DATABRICKS_WORKFLOW_NAME: str = "{{ databricks_workflow_name }}"
 DATABRICKS_POLL_PERIOD: int = {{ databricks_poll_period }}
 DATABRICKS_RETRY_LIMIT: int = {{ databricks_retry_limit }}
 DATABRICKS_RETRY_DELAY: int = {{ databricks_retry_delay }}
 
 # Task config -- dbt
 DBT_CLOUD_CONN_ID = "{{ dbt_cloud_conn_id }}"
-DBT_JOB_NAME: str = f'bronze_{SOURCE_NAME}_processing_job'
-DBT_JOB_ID: Optional[int] = None
-DBT_ACCOUNT_ID: int = {{ dbt_account_id }}
+DBT_JOB_NAME: str = "{{ dbt_job_name }}"
+DBT_ENVIRONMENT_NAME: str = "{{ dbt_environment_name }}"
 DBT_PROJECT_ID: int = {{ dbt_project_id }}
 DBT_TRIGGER_REASON: str = "{{ dbt_trigger_reason }}"
 
-# Task config -- MS Teams
+# Notification config - MS Teams
 MSTEAMS_CONN_ID = "{{ msteams_conn_id }}"
 
 
 # -- DO NOT EDIT PAST HERE --
-
 
 class DbtCloudHook(BaseHook):
     """
@@ -54,6 +50,7 @@ class DbtCloudHook(BaseHook):
         self.dbt_cloud_conn_id = dbt_cloud_conn_id
         self.conn = self.get_connection(self.dbt_cloud_conn_id)
         self.tenant = self.conn.host.rstrip('/')
+        self.account_id = self.conn.login
         self.version = version
         self.token = self.conn.password  # Assuming token-based authentication
 
@@ -63,8 +60,8 @@ class DbtCloudHook(BaseHook):
             'Content-Type': 'application/json',
         }
 
-    def list_jobs(self, account_id: int):
-        endpoint = f'/accounts/{account_id}/jobs/'
+    def list_jobs(self):
+        endpoint = f'accounts/{self.account_id}/jobs/'
         url = f'https://{self.tenant}/api/{self.version}/{endpoint}'
         headers = self._build_headers()
 
@@ -78,16 +75,71 @@ class DbtCloudHook(BaseHook):
         else:
             response.raise_for_status()
 
-    def get_job_id(self, name: str, account_id: int, project_id: int):
-        jobs = self.list_jobs(account_id)
+    def list_environments(self):
+        endpoint = f'accounts/{self.account_id}/environments/'
+        url = f'https://{self.tenant}/api/v3/{endpoint}'
+        headers = self._build_headers()
+
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 200:
+            response_dict = response.json()
+            if response_dict['status']['code'] == 200:
+                return response_dict['data']
+
+        else:
+            response.raise_for_status()
+
+    def get_job_id(self, name: str, project_id: int, environment_id: int):
+        jobs = self.list_jobs()
         results = list(
             filter(lambda job:
                    job['name'] == name and
-                   job['account_id'] == account_id and
-                   job['project_id'] == project_id,
+                   job['account_id'] == int(self.account_id) and
+                   job['project_id'] == project_id and
+                   job['environment_id'] == int(environment_id),
                    jobs))
         if results:
             return results[0].get('id')
+
+    def get_environment_id(self, name: str, project_id: int):
+        envs = self.list_environments()
+        results = list(
+            filter(lambda env:
+                   env['name'] == name and
+                   env['account_id'] == int(self.account_id) and
+                   env['project_id'] == project_id,
+                   envs))
+        if results:
+            return results[0].get('id')
+
+
+class MSTeamsWebhookHook(BaseHook):
+    """
+    Airflow Hook for sending messages to a Microsoft Teams channel using a webhook.
+    """
+
+    def __init__(self, teams_conn_id='msteams_default'):
+        super().__init__()
+        self.teams_conn_id = teams_conn_id
+        self.conn = self.get_connection(self.teams_conn_id)
+        self.webhook_url = self.conn.host.rstrip('/')  # Assuming the connection holds the webhook URL
+
+    def send_task_status(self, status):
+        pass
+
+
+class TeamsNotifier(BaseNotifier):
+
+    def __init__(self):
+        super().__init__()
+
+    def hook(self):
+        pass
+
+    def notify(self, context: Context) -> None:
+        dag_run_id = context['run_id']
+        task_key = context['task_instance_key_str']
 
 
 default_args = {
@@ -99,25 +151,32 @@ default_args = {
 
 @task_group
 def dbt_run():
-    @task(task_id=f'get_{SOURCE_NAME}_job_id')
-    def get_dbt_job_id(name: str, account_id: int, project_id: int):
+    @task(task_id=f'get_{SOURCE_NAME}_environment_id')
+    def get_dbt_env_id(name: str, project_id: int):
         hook = DbtCloudHook(dbt_cloud_conn_id=DBT_CLOUD_CONN_ID)
-        job_id = hook.get_job_id(name=name, account_id=account_id, project_id=project_id)
+        env_id = hook.get_environment_id(name=name, project_id=project_id)
+        return env_id
+
+    @task(task_id=f'get_{SOURCE_NAME}_job_id')
+    def get_dbt_job_id(name: str, project_id: int, env_id):
+        hook = DbtCloudHook(dbt_cloud_conn_id=DBT_CLOUD_CONN_ID)
+        job_id = hook.get_job_id(name=name, project_id=project_id, environment_id=env_id)
         return job_id
 
     # define Op
-    t1 = get_dbt_job_id(name=DBT_JOB_NAME, account_id=DBT_ACCOUNT_ID, project_id=DBT_PROJECT_ID)
-    processing_op = DbtCloudRunJobOperator(
+    t1 = get_dbt_env_id(name=DBT_ENVIRONMENT_NAME, project_id=DBT_PROJECT_ID)
+    t2 = get_dbt_job_id(name=DBT_JOB_NAME, project_id=DBT_PROJECT_ID, env_id=t1)
+    _ = DbtCloudRunJobOperator(
         task_id=f'trigger_{SOURCE_NAME}_job',
         dbt_cloud_conn_id=DBT_CLOUD_CONN_ID,
-        job_id=t1,
+        job_id=t2,
         trigger_reason=DBT_TRIGGER_REASON)
 
-    # define DAG
-    return t1.set_downstream(processing_op)
 
 DAG_TAGS.append(SOURCE_NAME)
-@dag(dag_id=f'elt_bronze_{SOURCE_NAME}_dag',
+
+
+@dag(dag_id=DAG_ID,
      schedule_interval=DAG_SCHEDULE_INTERVAL,
      default_args=default_args,
      catchup=DAG_CATCHUP,
@@ -128,8 +187,7 @@ def elt_dag():
     t2 = dbt_run()
     ingestion_op = DatabricksRunNowOperator(
         task_id=f'trigger_{SOURCE_NAME}_workflow',
-        job_name=DATABRICKS_JOB_NAME,
-        notebook_params=DATABRICKS_NOTEBOOK_PARAMS,
+        job_name=DATABRICKS_WORKFLOW_NAME,
         polling_period_seconds=DATABRICKS_POLL_PERIOD,
         databricks_retry_limit=DATABRICKS_RETRY_LIMIT,
         databricks_retry_delay=DATABRICKS_RETRY_DELAY,

@@ -3,3 +3,4 @@ apache-airflow-providers-dbt-cloud
 requests
 PyYAML
 Jinja2
+apache-airflow-providers-apprise

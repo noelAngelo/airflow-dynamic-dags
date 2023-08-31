@@ -16,14 +16,16 @@ catchup: False
 
 # Task config -- Databricks
 databricks_conn_id: 'databricks_default'
+databricks_workflow_name: bronze_fleetsu_ingestion_workflow
 databricks_poll_period: 30
 databricks_retry_limit: 3
 databricks_retry_delay: 1
 
 # Task config -- dbt
 dbt_cloud_conn_id: 'dbt_cloud_default'
-dbt_account_id: 92
 dbt_project_id: 2780
+dbt_environment_name: deployment_env
+dbt_job_name: Build Bronze Fleetsu
 dbt_trigger_reason: 'Triggered via Airflow'
 
 # Task config -- MS Teams
